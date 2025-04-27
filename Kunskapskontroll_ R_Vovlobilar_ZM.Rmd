@@ -1,0 +1,291 @@
+---
+title: " Volvo-bilar: EDA och Regressionsmodell"
+author: "Zakariyae Mokhtari"
+output: html_document
+---
+
+
+
+##  Inledning
+
+Den här rapporten utforskar försäljningspriser för begagnade Volvo-bilar från Blocket. Syftet är att kombinera **Exploratory Data Analysis (EDA)** med **prediktiv modellering** för att identifiera de faktorer som påverkar priset mest, samt skapa tillförlitliga modeller för att förutsäga priser.
+
+##  Importera och förbehandla data
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(readxl)
+library(scales)
+library(caret)
+library(lmtest)
+library(car)
+```
+
+```{r läs-data}
+url <- "https://github.com/siffror/Regressionsmodellering_R_Bilannonser/raw/main/R_Volvo_data_bilar.xlsx"
+temp <- tempfile(fileext = ".xlsx")
+download.file(url, temp, mode = "wb")
+data <- read_excel(temp)
+```
+
+
+
+##  EDA: Visualisering och sammanfattning
+
+```{r}
+str(data)
+summary(data)
+colSums(is.na(data))
+```
+
+###  Struktur och transformation
+
+```{r}
+colnames(data) <- make.names(colnames(data)) # Kolumnnamn görs till giltiga R-namn
+data <- data %>% 
+  select(-starts_with("...")) %>% #tomma kolumner tas bort  
+  mutate(
+    Försäljningspris = as.numeric(gsub("[^0-9]", "", Försäljningspris)), 
+    Miltal = as.numeric(gsub("[^0-9]", "", Miltal)),
+    Hästkrafter = as.numeric(gsub("[^0-9]", "", Hästkrafter)),
+    Motorstorlek = as.numeric(gsub("[^0-9]", "", Motorstorlek)),
+    Bränsle = str_to_title(as.character(Bränsle)) %>% as.factor(), # Gör om bränsle till faktor kategorisk variabel
+    Växellåda = as.factor(Växellåda)
+  ) # konvertera kolumner till rätt datatyper
+```
+
+```{r}
+ggplot(data, aes(x = Försäljningspris)) +
+  geom_histogram(binwidth = 25000, fill = "steelblue", color = "white") +
+  scale_x_continuous(labels = comma) +
+  labs(title = "Fördelning av försäljningspris", x = "Pris (kr)", y = "Antal bilar")
+```
+```{r}
+
+library(plotly)
+
+plot_ly(data = data, x = ~Miltal, y = ~`Försäljningspris`, type = "scatter", mode = "markers") %>%
+  layout(title = "Försäljningspris i relation till miltal",
+         xaxis = list(title = "Miltal"),
+         yaxis = list(title = "Försäljningspris (kr)"))
+
+
+
+```
+
+
+```{r}
+ggplot(data, aes(x = Modellår)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "white") +
+  theme_minimal()
+```
+###
+Jag ville se hur pris och körsträcka varierar mellan olika årsmodeller. Därför grupperade jag datan på Modellår, räknade antal bilar, snittpris och snitt-miltal per år – och sorterade så det nyaste kommer överst."
+
+
+```{r}
+data %>%
+  group_by(Modellår) %>%
+  summarise(Antal = n(), MedelPris = mean(Försäljningspris, na.rm = TRUE), MedelMiltal = mean(Miltal, na.rm = TRUE)) %>%
+  arrange(desc(Modellår))
+```
+### boxplotar för att se hur försäljningspriserna varierar mellan olika faktorer
+
+```{r}
+ggplot(data, aes(x = Bränsle, y = Försäljningspris)) +
+  geom_boxplot(fill = "lightgreen") +
+  scale_y_continuous(labels = comma)
+```
+
+```{r}
+ggplot(data, aes(x = Växellåda, y = Försäljningspris)) +
+  geom_boxplot(fill = "skyblue") +
+  scale_y_continuous(labels = comma)
+```
+
+```{r}
+ggplot(data, aes(x = reorder(Region, Försäljningspris, median), y = Försäljningspris)) +
+  geom_boxplot(fill = "lightcoral") +
+  coord_flip() +
+  scale_y_continuous(labels = comma) +
+  labs(title = "Prisvariation mellan regioner", x = "Region", y = "Pris") +
+  theme_minimal()
+```
+
+## 🔢 Modellering: Träning och test
+
+```{r}
+set.seed(123 ) # För reproducerbarhet, samma uppdelning varje gång koden körs.
+train_index <- createDataPartition(data$Försäljningspris, p = 0.8, list = FALSE)
+train_data <- data[train_index, ]
+test_data <- data[-train_index, ] # testdata på osedda data
+
+train_data$logPris <- log(train_data$Försäljningspris)
+test_data$logPris <- log(test_data$Försäljningspris) 
+#Log-transformerar priset i både tränings- och testdata:
+
+#Dämpar effekten av extremt höga priser
+
+#Stabiliserar varians
+
+#Gör datan mer normalfördelad (bättre för linjär regression)
+```
+
+## 📈 Modell 1 – Numeriska variabler
+
+```{r}
+options(scipen = 999) # ← bra kod: Undviker vetenskaplig notation!
+model_log <- lm(logPris ~ Miltal + Modellår + Hästkrafter + Motorstorlek, data = train_data)
+summary(model_log)
+```
+
+```{r}
+options(scipen = 999)
+
+pred_log <- predict(model_log, newdata = test_data) # prediktera logaritmerade priser
+pred <- exp(pred_log) # exponentiera eller avloggar för att få tillbaka till försäljningspris i kr
+pred[pred < 0] <- 0 # sätt negativa värden till 0 bara säkerhets skull
+postResample(pred, test_data$Försäljningspris) # Jämför förutsägelser med verkliga priser på testdatan, och räknar ut RMSE, R² och MAE
+
+
+
+
+```
+
+##  Modell 2 – Med faktorer
+
+```{r}
+options(scipen = 999)
+
+model2 <- lm(logPris ~ Miltal + Modellår + Hästkrafter + Motorstorlek + Bränsle + Växellåda, data = train_data)
+summary(model2)
+```
+
+```{r}
+options(scipen = 999)
+# Säkerställ att faktornivåerna i test_data matchar train_data
+test_data$Bränsle <- factor(test_data$Bränsle, levels = levels(train_data$Bränsle))
+test_data$Växellåda <- factor(test_data$Växellåda, levels = levels(train_data$Växellåda))
+# Filtrera bort test-observationer med faktornivåer som inte finns i träningen
+test_data <- test_data %>%
+  filter(!is.na(Bränsle), !is.na(Växellåda)) %>%
+  filter(Bränsle %in% levels(train_data$Bränsle), Växellåda %in% levels(train_data$Växellåda))
+# Prediktion och back-transformering
+pred_log2 <- predict(model2, newdata = test_data)
+pred2 <- exp(pred_log2)
+pred2[pred2 < 0] <- 0
+# Modellutvärdering
+
+postResample(pred2, test_data$Försäljningspris)
+```
+
+##  Visualisering av modeller
+
+```{r}
+ggplot(data.frame(Verkligt = test_data$Försäljningspris, Prediktion = pred2),
+       aes(x = Verkligt, y = Prediktion)) +
+  geom_point(alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  scale_x_continuous(labels = comma) +
+  scale_y_continuous(labels = comma)
+```
+
+## Diagnostik
+
+```{r}
+
+options(scipen = 999)
+
+shapiro.test(residuals(model2))
+bptest(model2)
+durbinWatsonTest(model2)
+vif(model2)
+par(mfrow = c(2, 2))
+plot(model2)
+par(mfrow = c(1, 1))
+```
+```{r}
+# Beräkna residualer
+residualer <- residuals(model2)
+
+# Histogram + densitetskurva
+ggplot(data.frame(residualer), aes(x = residualer)) +
+  geom_histogram(aes(y = ..density..), bins = 30, fill = "skyblue", color = "white") +
+  geom_density(color = "red", size = 1) +
+  labs(title = "Residualernas fördelning",
+       x = "Residualer", y = "Densitet") +
+  theme_minimal()
+
+```
+
+```{r}
+cooksD <- cooks.distance(model2)
+
+# Ritar graf
+plot(cooksD, type = "h", main = "Cook's Distance", ylab = "Cook's Distance")
+abline(h = 5 / nrow(train_data), col = "red", lty = 2)
+
+# Hämtar topp 3 mest inflytelserika observationer
+top <- order(cooksD, decreasing = TRUE)[1:3]
+
+# Lägger till deras index i grafen
+text(x = top, y = cooksD[top], labels = top, pos = 2, cex = 0.8, col = "blue")
+
+
+```
+```{r}
+# Sammanställ prestanda
+resultat_df <- data.frame(
+  Modell = c("Modell 1 (endast numeriska)", "Modell 2 (med faktorer)"),
+  RMSE = c(postResample(pred, test_data$Försäljningspris)["RMSE"],
+           postResample(pred2, test_data$Försäljningspris)["RMSE"]),
+  R2 = c(postResample(pred, test_data$Försäljningspris)["Rsquared"],
+         postResample(pred2, test_data$Försäljningspris)["Rsquared"]),
+  MAE = c(postResample(pred, test_data$Försäljningspris)["MAE"],
+          postResample(pred2, test_data$Försäljningspris)["MAE"])
+)
+
+# Formatera värden snyggt
+resultat_df <- resultat_df %>%
+  mutate(across(where(is.numeric), ~round(., 0)))  # Avrunda till hela kr/tal
+
+# Visa som tabell
+knitr::kable(resultat_df, caption = "📋 Sammanställning av modellprestanda (testdata)")
+
+```
+
+```{r}
+# Visa de tre mest inflytelserika observationerna
+data[c(506, 489, 516), ]
+
+```
+
+
+##  Slutsats
+
+- **Miltal** har en stark negativ påverkan.
+- **Modellår** och **hästkrafter** påverkar priset positivt.
+- **Bränsletyp** och **växellåda** förbättrar modellens förklaringsgrad.
+- **Modell 2** är överlägsen Modell 1 enligt RMSE, MAE och R².
+
+
+
+# prediktion av en ny bil:
+```{r}
+ny_bil <- data.frame(
+  Miltal = 6125,
+  Modellår = 2018,
+  Hästkrafter = 153,
+  Motorstorlek = 1969,
+  Bränsle = factor("Bensin", levels = levels(train_data$Bränsle)),
+  Växellåda = factor("Manuell", levels = levels(train_data$Växellåda))
+)
+
+log_pred <- predict(model2, newdata = ny_bil)
+pris_pred <- exp(log_pred)
+pris_pred
+# Det verkliga priest är 179 900 kr
+```
+# För en annan bil, en Volvo V40 T3 från 2018 med manuell växellåda, 153 hk och 6 125 mil, förutsade modellen ett pris på 158 933 kr. Det faktiska annonspriset var 179 900 kr. Skillnaden kan bero på extrautrustning eller prissättning utöver grundspecifikationerna. Trots detta låg förutsägelsen nära det faktiska intervallet, vilket tyder på att modellen har praktisk relevans
+
