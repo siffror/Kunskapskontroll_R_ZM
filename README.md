@@ -26,5 +26,5 @@ Multikollinaritetstest (VIF)
 
 Visualiseringar med ggplot2
 
-Kommentar
+
 Projektet visar att även relativt enkla modeller kan ge användbara insikter när de byggs och valideras noggrant.
